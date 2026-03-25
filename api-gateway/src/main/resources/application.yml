@@ -1,0 +1,113 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: 6379
+  cloud:
+    gateway:
+      default-filters:
+        - DedupeResponseHeader=Access-Control-Allow-Origin
+      globalcors:
+        cors-configurations:
+          '[/**]':
+            allowedOrigins: "*"
+            allowedMethods: [GET, POST, PUT, DELETE, PATCH, OPTIONS]
+            allowedHeaders: "*"
+      routes:
+        # ── User / Auth Service ──────────────────────────────
+        - id: user-service-public
+          uri: lb://user-service
+          predicates: [Path=/api/v1/auth/**]
+
+        - id: user-service-private
+          uri: lb://user-service
+          predicates: [Path=/api/v1/users/**]
+          filters:
+            - name: CircuitBreaker
+              args: {name: userCircuitBreaker, fallbackUri: "forward:/fallback/user"}
+
+        # ── Movie Service ────────────────────────────────────
+        - id: movie-service
+          uri: lb://movie-service
+          predicates: [Path=/api/v1/movies/**]
+          filters:
+            - name: CircuitBreaker
+              args: {name: movieCircuitBreaker, fallbackUri: "forward:/fallback/movie"}
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 50
+                redis-rate-limiter.burstCapacity: 100
+                key-resolver: "#{@userKeyResolver}"
+
+
+        # ── Theatre Service ──────────────────────────────────
+        - id: theatre-service
+          uri: lb://theatre-service
+          predicates: [Path=/api/v1/theatres/**]
+          filters:
+            - name: CircuitBreaker
+              args: {name: theatreCircuitBreaker, fallbackUri: "forward:/fallback/theatre"}
+
+        # ── Booking Service ──────────────────────────────────
+        - id: booking-service
+          uri: lb://booking-service
+          predicates: [Path=/api/v1/bookings/**]
+          filters:
+            - name: CircuitBreaker
+              args: {name: bookingCircuitBreaker, fallbackUri: "forward:/fallback/booking"}
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 20
+                redis-rate-limiter.burstCapacity: 40
+                key-resolver: "#{@userKeyResolver}"
+
+        # ── Payment Service ──────────────────────────────────
+        - id: payment-service
+          uri: lb://payment-service
+          predicates: [Path=/api/v1/payments/**]
+          filters:
+            - name: CircuitBreaker
+              args: {name: paymentCircuitBreaker, fallbackUri: "forward:/fallback/payment"}
+
+        # ── Offer Service ────────────────────────────────────
+        - id: offer-service
+          uri: lb://offer-service
+          predicates: [Path=/api/v1/offers/**]
+
+jwt:
+  secret: ${JWT_SECRET:mySecretKey123456789012345678901234567890}
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_URI:http://localhost:8761/eureka}
+  instance:
+    prefer-ip-address: true
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      bookingCircuitBreaker:
+        sliding-window-size: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+      paymentCircuitBreaker:
+        sliding-window-size: 10
+        failure-rate-threshold: 40
+        wait-duration-in-open-state: 15s
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,gateway
+  endpoint:
+    health:
+      show-details: always
+
+
